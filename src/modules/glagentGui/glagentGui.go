@@ -10,6 +10,7 @@ import (
 	"glagent/src/modules/agentMod"
 	"glagent/src/modules/computer"
 	"glagent/src/modules/filesys"
+	"glagent/src/modules/gitops"
 	"glagent/src/modules/memory"
 	"glagent/src/modules/sessionstore"
 	"glagent/src/prompts"
@@ -94,6 +95,7 @@ type approvalRequest struct {
 	Kind        approvalKind
 	Summary     string
 	Reason      string
+	Preview     string
 	Command     string
 	FileRequest filesys.Request
 }
@@ -201,7 +203,8 @@ func modelFromStoredSession(stored *sessionstore.Session) model {
 		chat:           agentMod.NewChatSessionFromEntries(stored.ChatEntries, 10),
 		sessionID:      stored.ID,
 		permissionMode: permissionMode,
-		nextApprovalID: 1,
+		nextApprovalID: max(stored.NextApprovalID, 1),
+		pending:        restorePendingApprovals(stored.PendingApprovals),
 	}
 }
 
@@ -506,6 +509,48 @@ func (m *model) handleSlashCommand(cmdStr string) {
 			}
 		}
 
+	case "/git-status":
+		out, err := gitops.Status()
+		if err != nil {
+			m.addSystemMessage(fmt.Sprintf("Git status failed: %v", err))
+		} else {
+			m.addSystemMessage("Git status:\n" + out)
+		}
+
+	case "/git-diff":
+		out, err := gitops.Diff(arg)
+		if err != nil {
+			m.addSystemMessage(fmt.Sprintf("Git diff failed: %v", err))
+		} else if strings.TrimSpace(out) == "" {
+			m.addSystemMessage("No diff for the requested path.")
+		} else {
+			m.addSystemMessage("Git diff:\n" + out)
+		}
+
+	case "/git-stage":
+		if arg == "" {
+			m.addSystemMessage("Usage: /git-stage <path|.>")
+		} else {
+			out, err := gitops.Stage(arg)
+			if err != nil {
+				m.addSystemMessage(fmt.Sprintf("Git stage failed: %v", err))
+			} else {
+				m.addSystemMessage(out)
+			}
+		}
+
+	case "/git-commit":
+		if arg == "" {
+			m.addSystemMessage("Usage: /git-commit <message>")
+		} else {
+			out, err := gitops.Commit(arg)
+			if err != nil {
+				m.addSystemMessage(fmt.Sprintf("Git commit failed: %v", err))
+			} else {
+				m.addSystemMessage(out)
+			}
+		}
+
 	case "/clear":
 		m.chat.Clear()
 		m.messages = nil
@@ -803,10 +848,12 @@ func (m *model) addSystemMessage(content string) {
 
 func (m *model) saveSession() error {
 	stored := &sessionstore.Session{
-		ID:             m.sessionID,
-		Messages:       make([]sessionstore.Message, 0, len(m.messages)),
-		ChatEntries:    append([]agentMod.ChatEntry{}, m.chat.Entries...),
-		PermissionMode: m.permissionMode.String(),
+		ID:               m.sessionID,
+		Messages:         make([]sessionstore.Message, 0, len(m.messages)),
+		ChatEntries:      append([]agentMod.ChatEntry{}, m.chat.Entries...),
+		PermissionMode:   m.permissionMode.String(),
+		NextApprovalID:   m.nextApprovalID,
+		PendingApprovals: make([]sessionstore.PendingApproval, 0, len(m.pending)),
 	}
 
 	for _, msg := range m.messages {
@@ -814,6 +861,22 @@ func (m *model) saveSession() error {
 			Role:    msg.Role,
 			Content: msg.Content,
 			Time:    msg.Time,
+		})
+	}
+	for _, pending := range m.pending {
+		stored.PendingApprovals = append(stored.PendingApprovals, sessionstore.PendingApproval{
+			ID:         pending.ID,
+			Kind:       string(pending.Kind),
+			Operation:  string(pending.FileRequest.Type),
+			Summary:    pending.Summary,
+			Reason:     pending.Reason,
+			Command:    pending.Command,
+			Path:       pending.FileRequest.Path,
+			TargetPath: pending.FileRequest.TargetPath,
+			Content:    pending.FileRequest.Content,
+			OldText:    pending.FileRequest.OldText,
+			NewText:    pending.FileRequest.NewText,
+			Preview:    pending.Preview,
 		})
 	}
 
@@ -869,6 +932,7 @@ func collectApprovals(fileRequests []filesys.Request, commands []computer.Comman
 				Kind:        approvalKindFile,
 				Summary:     summarizeFileRequest(request),
 				Reason:      reason,
+				Preview:     filesys.Preview(request, permissionMode),
 				FileRequest: request,
 			})
 		}
@@ -879,6 +943,7 @@ func collectApprovals(fileRequests []filesys.Request, commands []computer.Comman
 				Kind:    approvalKindCommand,
 				Summary: "Run command: " + command.Command,
 				Reason:  reason,
+				Preview: command.Command,
 				Command: command.Command,
 			})
 		}
@@ -922,9 +987,47 @@ func (m *model) renderPendingApprovals() string {
 	sb.WriteString("Pending approvals:\n")
 	for _, req := range m.pending {
 		sb.WriteString(fmt.Sprintf("  %d. %s (%s)\n", req.ID, req.Summary, req.Reason))
+		if req.Preview != "" {
+			sb.WriteString("     Preview:\n")
+			for _, line := range strings.Split(req.Preview, "\n") {
+				sb.WriteString("       ")
+				sb.WriteString(line)
+				sb.WriteString("\n")
+			}
+		}
 	}
 	sb.WriteString("\nUse /approve <id> or /deny <id>.")
 	return sb.String()
+}
+
+func restorePendingApprovals(items []sessionstore.PendingApproval) []approvalRequest {
+	out := make([]approvalRequest, 0, len(items))
+	for _, item := range items {
+		out = append(out, approvalRequest{
+			ID:      item.ID,
+			Kind:    approvalKind(item.Kind),
+			Summary: item.Summary,
+			Reason:  item.Reason,
+			Preview: item.Preview,
+			Command: item.Command,
+			FileRequest: filesys.Request{
+				Path:       item.Path,
+				TargetPath: item.TargetPath,
+				Content:    item.Content,
+				OldText:    item.OldText,
+				NewText:    item.NewText,
+				Type:       filesys.OperationType(item.Operation),
+			},
+		})
+	}
+	return out
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (m *model) handleApprovalDecision(arg string, approved bool) error {

@@ -1,6 +1,10 @@
 package glagentgui
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+
 	"glagent/src/modules/agentMod"
 	"glagent/src/modules/computer"
 	"glagent/src/modules/sessionstore"
@@ -24,7 +28,12 @@ func StartGUI(options StartOptions) error {
 	}
 
 	p := tea.NewProgram(initialModel)
-	_, err = p.Run()
+	finalModel, err := p.Run()
+	if typed, ok := finalModel.(model); ok {
+		printResumeCommand(typed.sessionID)
+	} else if typed, ok := finalModel.(*model); ok && typed != nil {
+		printResumeCommand(typed.sessionID)
+	}
 	return err
 }
 
@@ -79,4 +88,17 @@ Use /computer full only if you want broader shell control.`)
 	_ = m.saveSession()
 
 	return m, nil
+}
+
+func printResumeCommand(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+
+	exeName := "glagent"
+	if base := filepath.Base(os.Args[0]); base != "" && base != "." {
+		exeName = base
+	}
+
+	fmt.Printf("\nResume this chat later with:\n  %s --continue %s\n", exeName, sessionID)
 }

@@ -327,6 +327,34 @@ func FormatResult(result Result) string {
 	return strings.TrimSpace(b.String())
 }
 
+func Preview(request Request, mode computer.PermissionMode) string {
+	resolved, err := resolvePath(request.Path, mode)
+	if err != nil {
+		return fmt.Sprintf("Path: %s\nPreview unavailable: %v", request.Path, err)
+	}
+
+	switch request.Type {
+	case OpDelete:
+		return "Delete path:\n" + resolved
+	case OpMove:
+		target, err := resolvePath(request.TargetPath, mode)
+		if err != nil {
+			return fmt.Sprintf("Move preview unavailable: %v", err)
+		}
+		return fmt.Sprintf("From: %s\nTo:   %s", resolved, target)
+	case OpPatch:
+		return buildPatchPreview(resolved, request.OldText, request.NewText)
+	case OpWrite:
+		return buildWritePreview(resolved, request.Content)
+	case OpAppend:
+		return buildAppendPreview(resolved, request.Content)
+	case OpMkdir:
+		return "Create directory:\n" + resolved
+	default:
+		return "Path:\n" + resolved
+	}
+}
+
 func extractSimpleBlock(input, openTag, closeTag string) (string, bool, string) {
 	start := strings.Index(input, openTag)
 	if start == -1 {
@@ -408,4 +436,42 @@ func isSensitivePath(path string) bool {
 
 func normalizeBlock(s string) string {
 	return strings.Trim(s, "\r\n")
+}
+
+func buildPatchPreview(path, oldText, newText string) string {
+	var b strings.Builder
+	b.WriteString("Patch file:\n")
+	b.WriteString(path)
+	b.WriteString("\n--- OLD ---\n")
+	b.WriteString(trimPreview(oldText))
+	b.WriteString("\n--- NEW ---\n")
+	b.WriteString(trimPreview(newText))
+	return b.String()
+}
+
+func buildWritePreview(path, content string) string {
+	current, _ := os.ReadFile(path)
+	var b strings.Builder
+	b.WriteString("Rewrite file:\n")
+	b.WriteString(path)
+	b.WriteString("\nCurrent bytes: ")
+	b.WriteString(fmt.Sprintf("%d", len(current)))
+	b.WriteString("\nNew bytes: ")
+	b.WriteString(fmt.Sprintf("%d", len(content)))
+	b.WriteString("\n--- NEW CONTENT PREVIEW ---\n")
+	b.WriteString(trimPreview(content))
+	return b.String()
+}
+
+func buildAppendPreview(path, content string) string {
+	return fmt.Sprintf("Append file:\n%s\n--- APPEND CONTENT ---\n%s", path, trimPreview(content))
+}
+
+func trimPreview(s string) string {
+	const limit = 600
+	out := strings.TrimSpace(s)
+	if len(out) <= limit {
+		return out
+	}
+	return out[:limit] + "\n...<truncated>..."
 }

@@ -42,6 +42,8 @@ Major layers:
   structured file read/list/write operations with workspace-aware path checks
 - `src/modules/memory`
   persistent long-term memory store
+- `src/modules/installer`
+  Windows-oriented setup/install flow for building, copying, and PATH registration
 - `src/modules/sessionstore`
   persisted session files
 - `src/prompts`
@@ -53,8 +55,38 @@ Major layers:
 
 - `--continue <chat-id>`
 - `--session <custom-id>`
+- `setup [--system] [--install-dir ...] [--binary-name ...]`
 
 Then it calls `glagentGui.StartGUI(options)`.
+
+If the first argument is `setup`, the normal TUI path is skipped and the installer flow is run instead.
+
+## Installer Flow
+
+The setup/install implementation lives in [src/modules/installer/installer.go](C:/Users/amesa/Desktop/GlAgent/src/modules/installer/installer.go).
+
+Current behavior:
+
+- builds the current project with `go build`
+- writes the executable into an install directory
+- updates user or machine `PATH`
+
+Scopes:
+
+- user scope:
+  installs into `%LocalAppData%\Programs\GlAgent`
+- system scope:
+  installs into `%ProgramFiles%\GlAgent`
+
+Current command shape:
+
+```text
+glagent setup
+glagent setup --system
+glagent setup --install-dir C:\Tools\GlAgent
+```
+
+The installer is Windows-only right now because PATH updates are implemented through the Windows registry.
 
 `StartGUI`:
 
@@ -294,6 +326,10 @@ Current UI commands:
 - `/approvals`
 - `/approve <id>`
 - `/deny <id>`
+- `/git-status`
+- `/git-diff <path>`
+- `/git-stage <path|.>`
+- `/git-commit <message>`
 
 Current approval triggers include:
 
@@ -306,6 +342,27 @@ Current approval triggers include:
 - selected machine-level shell commands in `full` mode
 
 This flow is intentionally lightweight but already much safer than a fire-and-forget execution model.
+
+Approvals are now persisted in the session store together with:
+
+- next approval id
+- preview text
+- file operation payload or command payload
+
+That means pending risky actions survive `--continue`.
+
+## GitOps Module
+
+Git-native commands live in [src/modules/gitops/gitops.go](C:/Users/amesa/Desktop/GlAgent/src/modules/gitops/gitops.go).
+
+Current operations:
+
+- status
+- diff
+- stage
+- commit
+
+This is intentionally a small first pass. It gives GlAgent a clean path for common git tasks without forcing everything through generic shell commands.
 
 ## Session Store
 

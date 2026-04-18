@@ -18,12 +18,29 @@ type Message struct {
 }
 
 type Session struct {
-	ID             string               `json:"id"`
-	CreatedAt      time.Time            `json:"created_at"`
-	UpdatedAt      time.Time            `json:"updated_at"`
-	Messages       []Message            `json:"messages"`
-	ChatEntries    []agentMod.ChatEntry `json:"chat_entries"`
-	PermissionMode string               `json:"permission_mode"`
+	ID               string               `json:"id"`
+	CreatedAt        time.Time            `json:"created_at"`
+	UpdatedAt        time.Time            `json:"updated_at"`
+	Messages         []Message            `json:"messages"`
+	ChatEntries      []agentMod.ChatEntry `json:"chat_entries"`
+	PermissionMode   string               `json:"permission_mode"`
+	NextApprovalID   int                  `json:"next_approval_id"`
+	PendingApprovals []PendingApproval    `json:"pending_approvals"`
+}
+
+type PendingApproval struct {
+	ID         int    `json:"id"`
+	Kind       string `json:"kind"`
+	Operation  string `json:"operation,omitempty"`
+	Summary    string `json:"summary"`
+	Reason     string `json:"reason"`
+	Command    string `json:"command,omitempty"`
+	Path       string `json:"path,omitempty"`
+	TargetPath string `json:"target_path,omitempty"`
+	Content    string `json:"content,omitempty"`
+	OldText    string `json:"old_text,omitempty"`
+	NewText    string `json:"new_text,omitempty"`
+	Preview    string `json:"preview,omitempty"`
 }
 
 func New(id string) *Session {

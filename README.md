@@ -142,6 +142,33 @@ cd GlAgent
 go mod download
 ```
 
+### Optional Windows Setup Command
+
+GlAgent now includes a Windows-oriented installer flow:
+
+```bash
+go run main.go setup
+```
+
+By default this installs to the current user's program directory and adds that directory to the user `PATH`.
+
+For a machine-wide install into `Program Files`:
+
+```bash
+go run main.go setup --system
+```
+
+Optional flags:
+
+- `--install-dir <path>`: install to a custom directory
+- `--binary-name <name>`: change the installed executable name
+
+After setup, open a new terminal and run:
+
+```bash
+glagent
+```
+
 ### Configure Environment
 
 Create a `.env` file in the project root:
@@ -173,6 +200,12 @@ Provider key mapping:
 
 ```bash
 go run main.go
+```
+
+If installed through setup:
+
+```bash
+glagent
 ```
 
 ### Resume a Session
@@ -209,6 +242,15 @@ go run main.go --session repo-audit
 - `/approvals`: list pending risky actions
 - `/approve <id>`: approve one risky action
 - `/deny <id>`: deny one risky action
+
+Approvals now persist in saved sessions, so if you exit and continue the chat later, pending actions are still there.
+
+### Git
+
+- `/git-status`: show repo status
+- `/git-diff <path>`: show diff for a file or path
+- `/git-stage <path|.>`: stage one path or all current changes
+- `/git-commit <message>`: create a commit from inside GlAgent
 
 ### Session
 
@@ -320,6 +362,7 @@ For built-in file actions:
 - `full` mode allows broader file access
 - writes still go through the app's own file-operation layer rather than raw model output being applied directly
 - risky rewrites, deletes, renames, patches to sensitive files, installs, and state-changing git commands can be paused for approval
+- risky approvals include previews so you can see what is about to change before confirming
 
 ## Storage
 
