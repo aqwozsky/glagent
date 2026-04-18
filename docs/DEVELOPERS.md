@@ -20,6 +20,7 @@ main.go
     -> Bubble Tea model
       -> agentMod.AskAIWithHistoryAndSystem(...)
         -> provider adapter
+      -> filesys.Apply(...)
       -> computer.Execute(...)
       -> sessionstore.Save(...)
       -> memory.Load()/Add()/BuildContext()
@@ -37,6 +38,8 @@ Major layers:
   provider-specific API adapters
 - `src/modules/computer`
   command protocol, execution permissions, PowerShell process execution
+- `src/modules/filesys`
+  structured file read/list/write operations with workspace-aware path checks
 - `src/modules/memory`
   persistent long-term memory store
 - `src/modules/sessionstore`
@@ -124,13 +127,16 @@ Flow:
 1. User sends a message.
 2. The message is added to visible history and chat history.
 3. The app calls `agentMod.AskAIWithHistoryAndSystem(...)`.
-4. Extra system instructions from `computer.Instructions(...)` tell the model how to request command execution.
-5. If the model returns no command blocks, the response is shown directly.
-6. If the model returns one or more `<glagent_command>` blocks:
+4. Extra system instructions from `computer.Instructions(...)` and `filesys.Instructions(...)` tell the model how to request actions.
+5. If the model returns no action blocks, the response is shown directly.
+6. If the model returns file blocks such as `<glagent_file_read>` or `<glagent_file_write ...>`:
+   the app extracts them with `filesys.ExtractRequests(...)`
+7. File operations are applied with `filesys.Apply(...)`.
+8. If the model also returns `<glagent_command>` blocks:
    the app extracts them with `computer.ExtractCommands(...)`
-7. Each command is executed with `computer.Execute(...)`.
-8. Results are written back into chat history as system messages.
-9. The model gets another turn and answers using the real command result.
+9. Commands are executed with `computer.Execute(...)`.
+10. Results are written back into chat history as system messages.
+11. The model gets another turn and answers using the real action results.
 
 The loop is intentionally bounded by `maxAgentSteps` to avoid runaway tool loops.
 
@@ -143,6 +149,7 @@ The effective system prompt combines:
 1. the active built-in prompt from `src/prompts/prompts.go`
 2. saved memory context from `memory.BuildContext()`
 3. optional extra system instructions such as command-execution rules
+4. optional structured file-operation rules
 
 This is done in `buildSystemPrompt(...)`.
 
@@ -231,6 +238,74 @@ Current safety is intentionally lightweight. In workspace mode, the app blocks o
 - per-command approval
 
 If you plan to increase automation power, this is the first subsystem to harden.
+
+## File System Module
+
+Structured file operations live in [src/modules/filesys/filesys.go](C:/Users/amesa/Desktop/GlAgent/src/modules/filesys/filesys.go).
+
+Responsibilities:
+
+- define the file-action protocol shown to the model
+- extract file requests from model output
+- resolve relative paths safely
+- restrict access to the workspace in `workspace` mode
+- perform read, list, and write operations
+- format file results back into chat history
+
+Current action types:
+
+- `read`
+- `list`
+- `write`
+- `append`
+- `mkdir`
+- `move`
+- `delete`
+- `patch`
+
+Current tags:
+
+- `<glagent_file_read>...</glagent_file_read>`
+- `<glagent_file_list>...</glagent_file_list>`
+- `<glagent_file_write path="...">...</glagent_file_write>`
+- `<glagent_file_append path="...">...</glagent_file_append>`
+- `<glagent_file_mkdir path="..."></glagent_file_mkdir>`
+- `<glagent_file_move from="..." to="..."></glagent_file_move>`
+- `<glagent_file_delete path="..."></glagent_file_delete>`
+- `<glagent_file_patch path="...">...</glagent_file_patch>`
+
+### Safety Notes
+
+The file layer is stronger than shell-only editing because:
+
+- paths are resolved by the app, not by the model
+- workspace mode restricts file access to the repo root
+- reads and writes have explicit structured request types
+- risky operations can be surfaced for approval instead of being executed immediately
+
+It is still intentionally simple. There is no patch preview, diff approval, or AST-aware editing yet.
+
+## Approval Flow
+
+Risky actions are paused and exposed to the user through slash commands.
+
+Current UI commands:
+
+- `/approvals`
+- `/approve <id>`
+- `/deny <id>`
+
+Current approval triggers include:
+
+- delete requests
+- move or rename requests
+- full-file rewrites in sensitive locations
+- patches to sensitive files
+- dependency-install commands
+- state-changing git commands
+- selected machine-level shell commands in `full` mode
+
+This flow is intentionally lightweight but already much safer than a fire-and-forget execution model.
 
 ## Session Store
 
@@ -333,6 +408,7 @@ GlAgent currently writes:
 - `.env`
 - `memory.json`
 - `.glagent/sessions/*.json`
+- arbitrary user-requested files when the model uses built-in file writes or shell commands in an allowed mode
 
 It may also read:
 
@@ -356,6 +432,8 @@ Today there are no deep automated tests for:
 - session restoration correctness
 - prompt composition
 - slash-command parsing
+- approval gating
+- patch-edit exact-match behavior
 
 These are strong candidates for the next test pass.
 
@@ -364,6 +442,7 @@ These are strong candidates for the next test pass.
 ### Safety
 
 - replace string-block rules with structured policy checks
+- add patch-level file editing instead of whole-file replacement only
 - add approval prompts for sensitive commands
 - add cwd restrictions in workspace mode
 - add audit logging for executed commands

@@ -1,6 +1,7 @@
 package glagentgui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"glagent/src/modules/agentMod"
 	"glagent/src/modules/computer"
+	"glagent/src/modules/filesys"
 	"glagent/src/modules/memory"
 	"glagent/src/modules/sessionstore"
 	"glagent/src/prompts"
@@ -39,8 +41,9 @@ type message struct {
 }
 
 type aiResponseMsg struct {
-	Text string
-	Err  error
+	Text             string
+	ApprovalRequests []approvalRequest
+	Err              error
 }
 
 type model struct {
@@ -75,6 +78,24 @@ type model struct {
 	err            error
 	sessionID      string
 	permissionMode computer.PermissionMode
+	nextApprovalID int
+	pending        []approvalRequest
+}
+
+type approvalKind string
+
+const (
+	approvalKindCommand approvalKind = "command"
+	approvalKindFile    approvalKind = "file"
+)
+
+type approvalRequest struct {
+	ID          int
+	Kind        approvalKind
+	Summary     string
+	Reason      string
+	Command     string
+	FileRequest filesys.Request
 }
 
 var (
@@ -180,6 +201,7 @@ func modelFromStoredSession(stored *sessionstore.Session) model {
 		chat:           agentMod.NewChatSessionFromEntries(stored.ChatEntries, 10),
 		sessionID:      stored.ID,
 		permissionMode: permissionMode,
+		nextApprovalID: 1,
 	}
 }
 
@@ -279,6 +301,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.Err
 		} else {
 			m.err = nil
+			if len(msg.ApprovalRequests) > 0 {
+				for _, req := range msg.ApprovalRequests {
+					req.ID = m.nextApprovalID
+					m.nextApprovalID++
+					m.pending = append(m.pending, req)
+				}
+				m.addSystemMessage(m.renderPendingApprovals())
+			}
 			if strings.TrimSpace(msg.Text) != "" {
 				m.addAssistantMessage(msg.Text)
 			}
@@ -423,8 +453,8 @@ func (m *model) handleSlashCommand(cmdStr string) {
 		}
 		memStore := memory.Load()
 
-		status := fmt.Sprintf("Current configuration:\n  Session: %s\n  Provider: %s\n  Model: %s\n  System Prompt: %s\n  Chat Entries: %d\n  Memories: %d\n  Computer Control: %s\n  Ollama Host: %s",
-			m.sessionID, provider, aiModel, activePrompt.Name, m.chat.HistoryCount(), memStore.Count(), m.permissionMode, ollamaHost)
+		status := fmt.Sprintf("Current configuration:\n  Session: %s\n  Provider: %s\n  Model: %s\n  System Prompt: %s\n  Chat Entries: %d\n  Memories: %d\n  Computer Control: %s\n  Pending Approvals: %d\n  Ollama Host: %s",
+			m.sessionID, provider, aiModel, activePrompt.Name, m.chat.HistoryCount(), memStore.Count(), m.permissionMode, len(m.pending), ollamaHost)
 		m.addSystemMessage(status)
 
 	case "/computer":
@@ -450,6 +480,31 @@ func (m *model) handleSlashCommand(cmdStr string) {
 
 	case "/session":
 		m.addSystemMessage(fmt.Sprintf("Current session: %s\nResume later with: glagent --continue %s", m.sessionID, m.sessionID))
+
+	case "/approvals":
+		if len(m.pending) == 0 {
+			m.addSystemMessage("There are no pending approvals.")
+		} else {
+			m.addSystemMessage(m.renderPendingApprovals())
+		}
+
+	case "/approve":
+		if arg == "" {
+			m.addSystemMessage("Usage: /approve <id>")
+		} else {
+			if err := m.handleApprovalDecision(arg, true); err != nil {
+				m.addSystemMessage(fmt.Sprintf("Approval failed: %v", err))
+			}
+		}
+
+	case "/deny":
+		if arg == "" {
+			m.addSystemMessage("Usage: /deny <id>")
+		} else {
+			if err := m.handleApprovalDecision(arg, false); err != nil {
+				m.addSystemMessage(fmt.Sprintf("Deny failed: %v", err))
+			}
+		}
 
 	case "/clear":
 		m.chat.Clear()
@@ -614,53 +669,74 @@ func (m model) makeAgentCall(prompt string) tea.Cmd {
 	permissionMode := m.permissionMode
 
 	return func() tea.Msg {
-		text, err := runAgentTurn(chat, prompt, permissionMode)
-		return aiResponseMsg{Text: text, Err: err}
+		text, approvals, err := runAgentTurn(chat, prompt, permissionMode)
+		return aiResponseMsg{Text: text, ApprovalRequests: approvals, Err: err}
 	}
 }
 
-func runAgentTurn(chat *agentMod.ChatSession, userPrompt string, permissionMode computer.PermissionMode) (string, error) {
+func runAgentTurn(chat *agentMod.ChatSession, userPrompt string, permissionMode computer.PermissionMode) (string, []approvalRequest, error) {
 	turnPrompt := userPrompt
 	finalText := ""
 
 	for step := 0; step < maxAgentSteps; step++ {
-		response, err := agentMod.AskAIWithHistoryAndSystem(chat, turnPrompt, computer.Instructions(permissionMode))
+		response, err := agentMod.AskAIWithHistoryAndSystem(chat, turnPrompt, buildAgentRuntimeInstructions(permissionMode))
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 
-		commands, cleaned := computer.ExtractCommands(response)
-		if len(commands) == 0 {
-			return strings.TrimSpace(cleaned), nil
+		fileRequests, withoutFileTags := filesys.ExtractRequests(response)
+		commands, cleaned := computer.ExtractCommands(withoutFileTags)
+		if len(fileRequests) == 0 && len(commands) == 0 {
+			return strings.TrimSpace(cleaned), nil, nil
 		}
 
 		if !permissionMode.AllowsExecution() {
 			if cleaned == "" {
-				return "Command execution is disabled. Enable it with /computer workspace or /computer full.", nil
+				return "Command execution is disabled. Enable it with /computer workspace or /computer full.", nil, nil
 			}
-			return cleaned + "\n\nCommand execution is disabled. Enable it with /computer workspace or /computer full.", nil
+			return cleaned + "\n\nCommand execution is disabled. Enable it with /computer workspace or /computer full.", nil, nil
 		}
 
 		if cleaned != "" && finalText == "" {
 			finalText = cleaned
 		}
 
+		approvals := collectApprovals(fileRequests, commands, permissionMode)
+		if len(approvals) > 0 {
+			text := cleaned
+			if text == "" {
+				text = "I have one or more risky actions ready, and I’m pausing for approval before executing them."
+			} else {
+				text += "\n\nI have one or more risky actions ready, and I’m pausing for approval before executing them."
+			}
+			return text, approvals, nil
+		}
+
+		for _, request := range fileRequests {
+			result, err := filesys.Apply(request, permissionMode)
+			if err != nil {
+				chat.AddSystemMessage(fmt.Sprintf("File operation failed for %q: %v", request.Path, err))
+				return "", nil, err
+			}
+			chat.AddSystemMessage(filesys.FormatResult(result))
+		}
+
 		for _, command := range commands {
 			result, err := computer.Execute(command.Command, permissionMode, 30*time.Second)
 			if err != nil {
 				chat.AddSystemMessage(fmt.Sprintf("Command execution failed for %q: %v", command.Command, err))
-				return "", err
+				return "", nil, err
 			}
 			chat.AddSystemMessage(computer.FormatResult(result))
 		}
 
-		turnPrompt = "The command result has been added to the conversation. Use that real output and answer the user directly. If you still need another command, emit another <glagent_command> block."
+		turnPrompt = "Real tool results have been added to the conversation. Use them directly in your answer. If more work is needed, inspect before editing, prefer targeted file actions over shell commands, and only request another action if necessary."
 	}
 
 	if finalText != "" {
-		return finalText, nil
+		return finalText, nil, nil
 	}
-	return "I hit the maximum command-execution steps for one turn. Please narrow the task or ask me to continue.", nil
+	return "I hit the maximum action steps for one turn. Please narrow the task or ask me to continue.", nil, nil
 }
 
 func (m *model) recalcViewportHeight() {
@@ -773,4 +849,126 @@ func maskKey(key string) string {
 		return "****"
 	}
 	return key[:4] + "..." + key[len(key)-4:]
+}
+
+func buildAgentRuntimeInstructions(permissionMode computer.PermissionMode) string {
+	return strings.Join([]string{
+		computer.Instructions(permissionMode),
+		filesys.Instructions(permissionMode),
+		"Before taking action, think through the smallest safe plan. Prefer read/list operations first, then targeted edits, then verification.",
+		"If a risky action is needed, request it normally. The app may pause for approval.",
+		"Prefer built-in file actions over shell for file work. Use shell commands mainly for running programs, build tools, git, or machine inspection.",
+	}, "\n\n")
+}
+
+func collectApprovals(fileRequests []filesys.Request, commands []computer.CommandRequest, permissionMode computer.PermissionMode) []approvalRequest {
+	var approvals []approvalRequest
+	for _, request := range fileRequests {
+		if risky, reason := filesys.AssessRisk(request, permissionMode); risky {
+			approvals = append(approvals, approvalRequest{
+				Kind:        approvalKindFile,
+				Summary:     summarizeFileRequest(request),
+				Reason:      reason,
+				FileRequest: request,
+			})
+		}
+	}
+	for _, command := range commands {
+		if risky, reason := assessCommandRisk(command.Command, permissionMode); risky {
+			approvals = append(approvals, approvalRequest{
+				Kind:    approvalKindCommand,
+				Summary: "Run command: " + command.Command,
+				Reason:  reason,
+				Command: command.Command,
+			})
+		}
+	}
+	return approvals
+}
+
+func assessCommandRisk(command string, permissionMode computer.PermissionMode) (bool, string) {
+	lower := strings.ToLower(strings.TrimSpace(command))
+	switch {
+	case strings.Contains(lower, "git push"), strings.Contains(lower, "git commit"), strings.Contains(lower, "git reset"), strings.Contains(lower, "git clean"):
+		return true, "git state-changing command requested"
+	case strings.Contains(lower, "npm install"), strings.Contains(lower, "pnpm add"), strings.Contains(lower, "yarn add"), strings.Contains(lower, "go get"):
+		return true, "dependency installation requested"
+	case permissionMode == computer.PermissionFull && (strings.Contains(lower, "set-executionpolicy") || strings.Contains(lower, "reg add") || strings.Contains(lower, "sc.exe")):
+		return true, "machine-level command requested"
+	default:
+		return false, ""
+	}
+}
+
+func summarizeFileRequest(request filesys.Request) string {
+	switch request.Type {
+	case filesys.OpDelete:
+		return "Delete: " + request.Path
+	case filesys.OpMove:
+		return fmt.Sprintf("Move: %s -> %s", request.Path, request.TargetPath)
+	case filesys.OpPatch:
+		return "Patch file: " + request.Path
+	case filesys.OpWrite:
+		return "Rewrite file: " + request.Path
+	case filesys.OpAppend:
+		return "Append file: " + request.Path
+	default:
+		return string(request.Type) + ": " + request.Path
+	}
+}
+
+func (m *model) renderPendingApprovals() string {
+	var sb strings.Builder
+	sb.WriteString("Pending approvals:\n")
+	for _, req := range m.pending {
+		sb.WriteString(fmt.Sprintf("  %d. %s (%s)\n", req.ID, req.Summary, req.Reason))
+	}
+	sb.WriteString("\nUse /approve <id> or /deny <id>.")
+	return sb.String()
+}
+
+func (m *model) handleApprovalDecision(arg string, approved bool) error {
+	var id int
+	if _, err := fmt.Sscanf(arg, "%d", &id); err != nil || id < 1 {
+		return errors.New("please provide a valid approval id")
+	}
+
+	index := -1
+	var req approvalRequest
+	for i, pending := range m.pending {
+		if pending.ID == id {
+			index = i
+			req = pending
+			break
+		}
+	}
+	if index == -1 {
+		return fmt.Errorf("approval %d not found", id)
+	}
+
+	m.pending = append(m.pending[:index], m.pending[index+1:]...)
+	if !approved {
+		m.addSystemMessage(fmt.Sprintf("Denied approval %d: %s", id, req.Summary))
+		return nil
+	}
+
+	switch req.Kind {
+	case approvalKindFile:
+		result, err := filesys.Apply(req.FileRequest, m.permissionMode)
+		if err != nil {
+			return err
+		}
+		m.addSystemMessage(fmt.Sprintf("Approved action %d.", id))
+		m.addSystemMessage(filesys.FormatResult(result))
+	case approvalKindCommand:
+		result, err := computer.Execute(req.Command, m.permissionMode, 30*time.Second)
+		if err != nil {
+			return err
+		}
+		m.addSystemMessage(fmt.Sprintf("Approved action %d.", id))
+		m.addSystemMessage(computer.FormatResult(result))
+	default:
+		return fmt.Errorf("unsupported approval kind %q", req.Kind)
+	}
+	return nil
 }

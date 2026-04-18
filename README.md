@@ -10,6 +10,7 @@ GlAgent is a terminal-first AI agent built in Go. It combines a Bubble Tea TUI, 
 
 - Chat with multiple AI providers from one terminal UI
 - Run local commands when the model needs real output from your machine
+- Read, list, patch, move, delete, and write files through built-in structured file actions
 - Save and resume chat sessions with `--continue <chat-id>`
 - Store lightweight long-term memory in `memory.json`
 - Switch system prompts for coding, writing, or analysis
@@ -47,9 +48,9 @@ Provider selection is controlled with:
 - `/agent <provider>`
 - `/mode <model>`
 
-### Agentic Command Execution
+### Agentic Command and File Execution
 
-GlAgent can run local PowerShell commands and feed their output back into the model. This is how the assistant can verify local facts instead of guessing.
+GlAgent can run local PowerShell commands and also perform first-class file operations. This is how the assistant can verify local facts, inspect project files, and save changes without only falling back to "run this yourself."
 
 Execution modes:
 
@@ -58,6 +59,20 @@ Execution modes:
 - `full`: the model can run broader machine commands and will warn the user when enabled
 
 Workspace mode is the default because it is the best balance of usefulness and safety for local development work.
+
+Built-in file actions:
+
+- read a file
+- list a directory
+- write or replace a file
+- append to a file
+- patch exact text inside a file
+- create a directory
+- move or rename a file
+- delete a file or directory
+
+In `workspace` mode, file actions are limited to the current project directory. In `full` mode, broader file access is allowed.
+Risky actions can pause for approval before execution.
 
 ### Persistent Sessions
 
@@ -189,6 +204,12 @@ go run main.go --session repo-audit
 - `/computer workspace`: allow project-scoped command execution
 - `/computer full`: allow broader shell control and show a warning
 
+### Approvals
+
+- `/approvals`: list pending risky actions
+- `/approve <id>`: approve one risky action
+- `/deny <id>`: deny one risky action
+
 ### Session
 
 - `/session`: show the current chat id and resume command
@@ -207,9 +228,13 @@ go run main.go --session repo-audit
 - `/clear`: clear current visible chat state
 - `/help`: show available commands
 
-## How Command Execution Works
+## How Execution Works
 
-GlAgent does not directly let the model run shell commands. Instead, the app uses a simple protocol:
+GlAgent does not directly let the model run shell commands or mutate files freely. Instead, the app exposes simple structured protocols that it parses and executes itself.
+
+### Command Protocol
+
+If the model needs a shell command, it emits:
 
 1. The model receives system instructions telling it how to request execution.
 2. If it needs a command, it emits:
@@ -225,7 +250,50 @@ npm -v
 5. The real stdout, stderr, exit code, duration, and working directory are added to chat history as a system message.
 6. The model gets another turn and answers using the real result.
 
-This makes the assistant much more useful for local verification tasks while keeping execution inside app-controlled code.
+### File Protocol
+
+If the model needs a file read, directory listing, or file write, it can emit:
+
+```text
+<glagent_file_read>
+README.md
+</glagent_file_read>
+```
+
+```text
+<glagent_file_list>
+src/modules
+</glagent_file_list>
+```
+
+```text
+<glagent_file_write path="notes.txt">
+hello from glagent
+</glagent_file_write>
+```
+
+```text
+<glagent_file_patch path="README.md">
+<<OLD>>
+old text
+<</OLD>>
+<<NEW>>
+new text
+<</NEW>>
+</glagent_file_patch>
+```
+
+```text
+<glagent_file_move from="old.txt" to="new.txt"></glagent_file_move>
+```
+
+```text
+<glagent_file_delete path="tmp/output.txt"></glagent_file_delete>
+```
+
+The app resolves the target path, enforces workspace restrictions when applicable, performs the operation, and sends the real result back into the conversation as a system message.
+
+This makes the assistant much more useful for local verification and editing tasks while keeping execution inside app-controlled code.
 
 ## Safety Model
 
@@ -246,6 +314,13 @@ In workspace mode, GlAgent currently blocks obvious destructive command fragment
 
 This is only a lightweight safeguard, not a full sandbox. If you enable `full`, the assistant should be treated as having broad shell-level power on the machine.
 
+For built-in file actions:
+
+- `workspace` mode restricts file paths to the current repo root
+- `full` mode allows broader file access
+- writes still go through the app's own file-operation layer rather than raw model output being applied directly
+- risky rewrites, deletes, renames, patches to sensitive files, installs, and state-changing git commands can be paused for approval
+
 ## Storage
 
 Files GlAgent writes today:
@@ -263,6 +338,7 @@ src/
     agentMod/
       providers/
     computer/
+    filesys/
     consoleMarkdown/
     customLogging/
     glagentGui/
@@ -299,6 +375,7 @@ For architecture, extension points, storage details, and internal flow, see [doc
 
 - Command execution currently uses PowerShell directly and is Windows-oriented
 - The safety checks are heuristic, not a real sandbox
+- Patch editing currently relies on exact text matches
 - Session persistence is file-based and intentionally simple
 - There are no automated behavioral tests yet, only compile-level coverage unless you add more tests
 - "Full computer control" currently means shell execution, not full desktop GUI automation
