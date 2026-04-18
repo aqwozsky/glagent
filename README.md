@@ -159,13 +159,18 @@ go mod download
 
 ### Optional Windows Setup Command
 
-GlAgent now includes a Windows-oriented installer flow:
+GlAgent includes a built-in installer flow:
 
 ```bash
 go run main.go setup
 ```
 
-By default this installs to the current user's program directory and adds that directory to the user `PATH`.
+The installer prefers copying the current executable, so once GlAgent is installed it can keep working even if you later remove the source checkout.
+
+By default this installs to the current user's standard binary directory:
+
+- Windows: `%LocalAppData%\Programs\GlAgent`
+- Linux: `~/.local/bin`
 
 For a machine-wide install into `Program Files`:
 
@@ -173,10 +178,24 @@ For a machine-wide install into `Program Files`:
 go run main.go setup --system
 ```
 
+On Linux, `--system` installs into `/usr/local/bin`.
+
 Optional flags:
 
 - `--install-dir <path>`: install to a custom directory
 - `--binary-name <name>`: change the installed executable name
+
+Install scripts are also included:
+
+```powershell
+./scripts/install.ps1
+./scripts/install.ps1 -System
+```
+
+```bash
+./scripts/install.sh
+./scripts/install.sh --system
+```
 
 After setup, open a new terminal and run:
 
@@ -279,7 +298,8 @@ Approvals now persist in saved sessions, so if you exit and continue the chat la
 - `/save <text>`: save a memory
 - `/memory`: list all saved memories
 - `/forget <memory-id>`: delete one memory by id
-- `/forget-all`: clear all memories
+- `/clear memory`: clear all saved memories
+- `/clear all`: clear chat history and all saved memories
 
 ### Utilities
 

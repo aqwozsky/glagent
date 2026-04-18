@@ -22,6 +22,9 @@ func buildSystemPrompt(extraParts ...string) string {
 
 	parts := []string{base}
 	if memCtx != "" {
+		parts = append(parts,
+			"Memory usage rules:\n- Saved memories are facts about the user.\n- If a saved memory answers the user's question, answer from that memory.\n- Reinterpret first-person memory wording from the user's perspective, not GlAgent's perspective.",
+		)
 		parts = append(parts, memCtx)
 	}
 	for _, part := range extraParts {

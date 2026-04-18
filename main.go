@@ -63,10 +63,16 @@ func runSetup(args []string) error {
 	fmt.Printf("Scope: %s\n", result.Scope)
 	fmt.Printf("Install Directory: %s\n", result.InstallDir)
 	fmt.Printf("Installed Binary: %s\n", result.BinaryPath)
+	if result.InstallSource != "" {
+		fmt.Printf("Install Source: %s\n", result.InstallSource)
+	}
 	if result.PathUpdated {
 		fmt.Println("PATH: updated")
 	} else {
 		fmt.Println("PATH: already contained install directory")
+	}
+	if result.PathHint != "" {
+		fmt.Printf("PATH Hint: %s\n", result.PathHint)
 	}
 	fmt.Println("You may need to open a new terminal for PATH changes to take effect.")
 	fmt.Printf("Run later with: %s\n", result.BinaryPath)

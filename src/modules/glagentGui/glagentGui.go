@@ -582,10 +582,26 @@ func (m *model) handleSlashCommand(cmdStr string) {
 		}
 
 	case "/clear":
-		m.chat.Clear()
-		m.messages = nil
-		m.err = nil
-		m.addSystemMessage("Chat history cleared.")
+		switch strings.ToLower(strings.TrimSpace(arg)) {
+		case "", "chat":
+			m.clearChatState()
+			m.addSystemMessage("Chat history cleared.")
+		case "memory":
+			if err := m.clearMemoryState(); err != nil {
+				m.addSystemMessage(fmt.Sprintf("Failed to clear memory: %v", err))
+			} else {
+				m.addSystemMessage("Saved memories cleared.")
+			}
+		case "all":
+			m.clearChatState()
+			if err := m.clearMemoryState(); err != nil {
+				m.addSystemMessage(fmt.Sprintf("Chat cleared, but memory clear failed: %v", err))
+			} else {
+				m.addSystemMessage("Chat history and saved memories cleared.")
+			}
+		default:
+			m.addSystemMessage("Usage: /clear [chat|memory|all]")
+		}
 
 	case "/save":
 		if arg == "" {
@@ -604,14 +620,14 @@ func (m *model) handleSlashCommand(cmdStr string) {
 		store := memory.Load()
 		items := store.List()
 		if len(items) == 0 {
-			m.addSystemMessage("Memory is empty. Use /save or say \"remember that ...\" to add items.")
+			m.addSystemMessage("Memory is empty. Use /save or say \"remember ...\" to add items.")
 		} else {
 			var sb strings.Builder
 			sb.WriteString(fmt.Sprintf("Saved memories (%d items):\n", len(items)))
 			for _, item := range items {
 				sb.WriteString(fmt.Sprintf("  [%s] %s\n", shortMemoryID(item.ID), item.Content))
 			}
-			sb.WriteString("\nUse /forget <memory-id> to remove one item, or /forget-all to clear everything.")
+			sb.WriteString("\nUse /forget <memory-id> to remove one item, or /clear memory to clear everything.")
 			m.addSystemMessage(sb.String())
 		}
 
@@ -627,12 +643,11 @@ func (m *model) handleSlashCommand(cmdStr string) {
 			}
 		}
 
-	case "/forget-all":
-		store := memory.Load()
-		if err := store.Clear(); err != nil {
+	case "/forget-all", "/forget-everything":
+		if err := m.clearMemoryState(); err != nil {
 			m.addSystemMessage(fmt.Sprintf("Failed to clear memory: %v", err))
 		} else {
-			m.addSystemMessage("All memories cleared.")
+			m.addSystemMessage("Saved memories cleared. Tip: /clear memory is the main command now.")
 		}
 
 	case "/help":
@@ -882,6 +897,17 @@ func (m *model) addSystemMessage(content string) {
 	m.messages = append(m.messages, msg)
 	m.chat.AddSystemMessage(content)
 	_ = m.saveSession()
+}
+
+func (m *model) clearChatState() {
+	m.chat.Clear()
+	m.messages = nil
+	m.err = nil
+}
+
+func (m *model) clearMemoryState() error {
+	store := memory.Load()
+	return store.Clear()
 }
 
 func (m *model) saveSession() error {

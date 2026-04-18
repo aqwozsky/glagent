@@ -47,10 +47,9 @@ var allCommands = []slashCommand{
 	{Name: "/save", Description: "Save something to memory", Usage: "/save <content>"},
 	{Name: "/memory", Description: "View saved memories", Usage: "/memory"},
 	{Name: "/forget", Description: "Remove a memory by id", Usage: "/forget <memory-id>"},
-	{Name: "/forget-all", Description: "Clear all memories", Usage: "/forget-all"},
+	{Name: "/clear", Description: "Clear chat, memory, or both", Usage: "/clear [chat|memory|all]"},
 	{Name: "/ollama-models", Description: "List local Ollama models", Usage: "/ollama-models"},
 	{Name: "/status", Description: "Show current config", Usage: "/status"},
-	{Name: "/clear", Description: "Clear chat history", Usage: "/clear"},
 	{Name: "/help", Description: "Show help message", Usage: "/help"},
 }
 
@@ -78,6 +77,12 @@ var computerModeSuggestions = []selectorItem{
 var workflowModeSuggestions = []selectorItem{
 	{Value: "run", Description: "Act directly, using tools when needed"},
 	{Value: "plan", Description: "Inspect first and respond with a plan before acting"},
+}
+
+var clearModeSuggestions = []selectorItem{
+	{Value: "chat", Description: "Clear the current chat history only"},
+	{Value: "memory", Description: "Clear saved user memories only"},
+	{Value: "all", Description: "Clear chat history and saved memories"},
 }
 
 var geminiModels = []selectorItem{
@@ -223,6 +228,10 @@ func getArgumentSuggestions(command string, argIndex int, currentArg string) []s
 	case "/workflow":
 		if argIndex == 0 {
 			pool = workflowModeSuggestions
+		}
+	case "/clear":
+		if argIndex == 0 {
+			pool = clearModeSuggestions
 		}
 	}
 

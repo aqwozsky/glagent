@@ -67,16 +67,20 @@ The setup/install implementation lives in [src/modules/installer/installer.go](C
 
 Current behavior:
 
-- builds the current project with `go build`
+- prefers staging the current executable for install
+- falls back to `go build` when needed
 - writes the executable into an install directory
-- updates user or machine `PATH`
+- updates `PATH` on Windows
+- reports a PATH hint on Linux when the shell path does not already include the install directory
 
 Scopes:
 
 - user scope:
-  installs into `%LocalAppData%\Programs\GlAgent`
+  installs into `%LocalAppData%\Programs\GlAgent` on Windows
+  installs into `~/.local/bin` on Linux
 - system scope:
-  installs into `%ProgramFiles%\GlAgent`
+  installs into `%ProgramFiles%\GlAgent` on Windows
+  installs into `/usr/local/bin` on Linux
 
 Current command shape:
 
@@ -86,7 +90,10 @@ glagent setup --system
 glagent setup --install-dir C:\Tools\GlAgent
 ```
 
-The installer is Windows-only right now because PATH updates are implemented through the Windows registry.
+Helper scripts also exist in:
+
+- `scripts/install.ps1`
+- `scripts/install.sh`
 
 `StartGUI`:
 

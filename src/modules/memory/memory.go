@@ -132,15 +132,22 @@ func (s *Store) BuildContext() string {
 	}
 
 	var b strings.Builder
-	b.WriteString("== User Saved Memories ==\n")
+	b.WriteString("== Persistent User Memory ==\n")
 	b.WriteString("These facts were explicitly saved by the user. Treat them as persistent context unless the user removes them.\n")
-	b.WriteString("These memories describe the user, the user's preferences, the user's projects, or the user's environment.\n")
-	b.WriteString("Do not treat these memories as your own identity, biography, or preferences.\n")
+	b.WriteString("They describe the user, the user's preferences, the user's projects, or the user's environment.\n")
+	b.WriteString("Important: many memories are written in first person from the user's perspective.\n")
+	b.WriteString("Interpret first-person wording as referring to the user, not to GlAgent.\n")
+	b.WriteString("Example: if a memory says \"my name is Baris\", that means the user's name is Baris.\n")
+	b.WriteString("If the user asks about their name, preferences, setup, or other stored facts and the answer appears below, answer from memory directly.\n")
 	b.WriteString("Never claim that the user's name, role, or personal details are your own. You are always GlAgent.\n\n")
 	for _, item := range s.Items {
-		b.WriteString(fmt.Sprintf("- [%s] %s\n", shortID(item.ID), item.Content))
+		b.WriteString(fmt.Sprintf("- Memory [%s]\n", shortID(item.ID)))
+		b.WriteString(fmt.Sprintf("  Raw user statement: %q\n", item.Content))
+		if normalized := normalizeUserFact(item.Content); normalized != "" {
+			b.WriteString(fmt.Sprintf("  Interpreted user fact: %s\n", normalized))
+		}
 	}
-	b.WriteString("\n== End of Memories ==")
+	b.WriteString("\n== End of User Memory ==")
 	return b.String()
 }
 
@@ -212,4 +219,33 @@ func shortID(id string) string {
 		return id
 	}
 	return id[len(id)-12:]
+}
+
+func normalizeUserFact(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return ""
+	}
+
+	lower := strings.ToLower(trimmed)
+	switch {
+	case strings.HasPrefix(lower, "my "):
+		return "The user's " + strings.TrimSpace(trimmed[3:])
+	case strings.HasPrefix(lower, "i am "):
+		return "The user is " + strings.TrimSpace(trimmed[5:])
+	case strings.HasPrefix(lower, "i'm "):
+		return "The user is " + strings.TrimSpace(trimmed[4:])
+	case strings.HasPrefix(lower, "im "):
+		return "The user is " + strings.TrimSpace(trimmed[3:])
+	case strings.HasPrefix(lower, "i use "):
+		return "The user uses " + strings.TrimSpace(trimmed[6:])
+	case strings.HasPrefix(lower, "i prefer "):
+		return "The user prefers " + strings.TrimSpace(trimmed[9:])
+	case strings.HasPrefix(lower, "i like "):
+		return "The user likes " + strings.TrimSpace(trimmed[7:])
+	case strings.HasPrefix(lower, "i work on "):
+		return "The user works on " + strings.TrimSpace(trimmed[10:])
+	default:
+		return "The user said: " + trimmed
+	}
 }
