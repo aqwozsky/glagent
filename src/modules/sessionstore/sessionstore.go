@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"glagent/src/modules/agentMod"
+	"glagent/src/modules/appstate"
 )
 
 type Message struct {
@@ -24,6 +25,7 @@ type Session struct {
 	Messages         []Message            `json:"messages"`
 	ChatEntries      []agentMod.ChatEntry `json:"chat_entries"`
 	PermissionMode   string               `json:"permission_mode"`
+	WorkflowMode     string               `json:"workflow_mode"`
 	NextApprovalID   int                  `json:"next_approval_id"`
 	PendingApprovals []PendingApproval    `json:"pending_approvals"`
 }
@@ -103,7 +105,7 @@ func Save(session *Session) error {
 }
 
 func baseDir() string {
-	return filepath.Join(".glagent", "sessions")
+	return appstate.SessionsDir()
 }
 
 func sessionPath(id string) string {

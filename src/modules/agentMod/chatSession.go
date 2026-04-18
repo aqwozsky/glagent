@@ -48,7 +48,7 @@ func (c *ChatSession) AddMessage(role, msg string) {
 	c.trim()
 }
 
-func (c *ChatSession) BuildPrompt(userInput string) string {
+func (c *ChatSession) BuildPrompt() string {
 	var b strings.Builder
 
 	for _, entry := range c.Entries {
@@ -58,11 +58,7 @@ func (c *ChatSession) BuildPrompt(userInput string) string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("User: ")
-	b.WriteString(userInput)
-	b.WriteString("\nAssistant:")
-
-	return b.String()
+	return strings.TrimSpace(b.String())
 }
 
 func (c *ChatSession) Clear() {

@@ -97,6 +97,7 @@ The installer is Windows-only right now because PATH updates are implemented thr
 Fresh sessions default to:
 
 - a generated session id from `sessionstore.NewID()`
+- `run` workflow mode
 - `workspace` computer-control mode
 - a fresh `agentMod.ChatSession`
 
@@ -114,6 +115,7 @@ It owns:
 - active `ChatSession`
 - session id
 - permission mode
+- workflow mode
 - errors
 
 Important methods:
@@ -171,6 +173,22 @@ Flow:
 11. The model gets another turn and answers using the real action results.
 
 The loop is intentionally bounded by `maxAgentSteps` to avoid runaway tool loops.
+
+### Workflow Modes
+
+The GUI now tracks a separate workflow mode:
+
+- `run`
+- `plan`
+
+This is intentionally different from `/mode`, which selects the model name.
+
+Behavior:
+
+- in `run`, the agent follows the normal inspect -> act -> verify loop
+- in `plan`, the runtime prompt tells the model not to execute commands or mutating file operations and instead return a concrete plan
+
+Workflow mode is shown in the header, included in `/status`, and persisted in the session JSON.
 
 ## Prompt Composition
 
@@ -381,6 +399,7 @@ Current stored fields:
 - visible messages
 - structured chat entries
 - permission mode
+- workflow mode
 
 This design keeps persistence transparent and easy to inspect manually.
 
@@ -413,6 +432,8 @@ It provides:
 The store is backed by `memory.json`.
 
 Current design is intentionally small and explicit. Memory is treated more like pinned user facts than a long conversation archive.
+
+Each memory item now has a stable id, which makes removal resilient across reordering and future migrations.
 
 ## Prompt Presets
 

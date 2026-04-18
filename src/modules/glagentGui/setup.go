@@ -82,8 +82,10 @@ Use /computer full only if you want broader shell control.`)
 		chat:           agentMod.NewChatSession(10),
 		sessionID:      sessionID,
 		permissionMode: computer.PermissionWorkspace,
+		workflowMode:   workflowRun,
 	}
 	m.addSystemMessage("Session started: " + sessionID)
+	m.addSystemMessage("Workflow mode is run. Use /workflow plan when you want GlAgent to inspect and plan before executing.")
 	m.addSystemMessage("Computer control is in workspace mode. Use /computer off, /computer workspace, or /computer full.")
 	_ = m.saveSession()
 
@@ -100,5 +102,21 @@ func printResumeCommand(sessionID string) {
 		exeName = base
 	}
 
-	fmt.Printf("\nResume this chat later with:\n  %s --continue %s\n", exeName, sessionID)
+	banner := `   ________    ___                    __
+  / ____/ /   /   | ____ ____  ____  / /_
+ / / __/ /   / /| |/ __ ` + "`" + `/ _ \/ __ \/ __/
+/ /_/ / /___/ ___ / /_/ /  __/ / / / /_
+\____/_____/_/  |_\__, /\___/_/ /_/\__/
+                 /____/`
+
+	bannerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#B07CD8")).
+		Bold(true)
+
+	commandStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#D4BEE4"))
+
+	fmt.Println()
+	fmt.Println(bannerStyle.Render(banner))
+	fmt.Println(commandStyle.Render(fmt.Sprintf("Resume this chat later with:\n  %s --continue %s", exeName, sessionID)))
 }

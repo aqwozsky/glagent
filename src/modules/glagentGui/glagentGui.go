@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"glagent/src/modules/agentMod"
+	"glagent/src/modules/appstate"
 	"glagent/src/modules/computer"
 	"glagent/src/modules/filesys"
 	"glagent/src/modules/gitops"
@@ -79,6 +80,7 @@ type model struct {
 	err            error
 	sessionID      string
 	permissionMode computer.PermissionMode
+	workflowMode   workflowMode
 	nextApprovalID int
 	pending        []approvalRequest
 }
@@ -99,6 +101,13 @@ type approvalRequest struct {
 	Command     string
 	FileRequest filesys.Request
 }
+
+type workflowMode string
+
+const (
+	workflowRun  workflowMode = "run"
+	workflowPlan workflowMode = "plan"
+)
 
 var (
 	violetMid    = lipgloss.Color("#6C3BAA")
@@ -193,6 +202,7 @@ func modelFromStoredSession(stored *sessionstore.Session) model {
 	if permissionMode == "" {
 		permissionMode = computer.PermissionWorkspace
 	}
+	workflow := parseWorkflowMode(stored.WorkflowMode)
 
 	return model{
 		input:          ta,
@@ -203,6 +213,7 @@ func modelFromStoredSession(stored *sessionstore.Session) model {
 		chat:           agentMod.NewChatSessionFromEntries(stored.ChatEntries, 10),
 		sessionID:      stored.ID,
 		permissionMode: permissionMode,
+		workflowMode:   workflow,
 		nextApprovalID: max(stored.NextApprovalID, 1),
 		pending:        restorePendingApprovals(stored.PendingApprovals),
 	}
@@ -282,10 +293,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				if content, ok := memory.DetectSaveIntent(v); ok {
 					store := memory.Load()
-					if err := store.Add(content); err != nil {
+					item, err := store.Add(content)
+					if err != nil {
 						m.addSystemMessage(fmt.Sprintf("Failed to save memory: %v", err))
 					} else {
-						m.addSystemMessage(fmt.Sprintf("Saved to memory: %q", content))
+						m.addSystemMessage(fmt.Sprintf("Saved to memory [%s]: %q", shortMemoryID(item.ID), content))
 					}
 				}
 
@@ -440,6 +452,24 @@ func (m *model) handleSlashCommand(cmdStr string) {
 			m.addSystemMessage(sb.String())
 		}
 
+	case "/workflow":
+		if arg == "" {
+			m.addSystemMessage("Usage: /workflow <plan|run>")
+		} else {
+			mode := parseWorkflowMode(arg)
+			if mode == "" {
+				m.addSystemMessage("Usage: /workflow <plan|run>")
+			} else {
+				m.workflowMode = mode
+				if mode == workflowPlan {
+					m.addSystemMessage("Workflow mode set to plan. GlAgent will inspect and propose a plan before taking action unless you explicitly ask it to run something.")
+				} else {
+					m.addSystemMessage("Workflow mode set to run. GlAgent can directly inspect, execute, and edit within the active permission rules.")
+				}
+				_ = m.saveSession()
+			}
+		}
+
 	case "/status":
 		provider := os.Getenv("AI_PROVIDER")
 		if provider == "" {
@@ -456,8 +486,8 @@ func (m *model) handleSlashCommand(cmdStr string) {
 		}
 		memStore := memory.Load()
 
-		status := fmt.Sprintf("Current configuration:\n  Session: %s\n  Provider: %s\n  Model: %s\n  System Prompt: %s\n  Chat Entries: %d\n  Memories: %d\n  Computer Control: %s\n  Pending Approvals: %d\n  Ollama Host: %s",
-			m.sessionID, provider, aiModel, activePrompt.Name, m.chat.HistoryCount(), memStore.Count(), m.permissionMode, len(m.pending), ollamaHost)
+		status := fmt.Sprintf("Current configuration:\n  Session: %s\n  Provider: %s\n  Model: %s\n  System Prompt: %s\n  Workflow: %s\n  Chat Entries: %d\n  Memories: %d\n  Computer Control: %s\n  Pending Approvals: %d\n  Ollama Host: %s",
+			m.sessionID, provider, aiModel, activePrompt.Name, m.workflowMode, m.chat.HistoryCount(), memStore.Count(), m.permissionMode, len(m.pending), ollamaHost)
 		m.addSystemMessage(status)
 
 	case "/computer":
@@ -562,10 +592,11 @@ func (m *model) handleSlashCommand(cmdStr string) {
 			m.addSystemMessage("Usage: /save <content to remember>")
 		} else {
 			store := memory.Load()
-			if err := store.Add(arg); err != nil {
+			item, err := store.Add(arg)
+			if err != nil {
 				m.addSystemMessage(fmt.Sprintf("Failed to save: %v", err))
 			} else {
-				m.addSystemMessage(fmt.Sprintf("Saved to memory: %q (%d total)", arg, store.Count()))
+				m.addSystemMessage(fmt.Sprintf("Saved to memory [%s]: %q (%d total)", shortMemoryID(item.ID), arg, store.Count()))
 			}
 		}
 
@@ -577,27 +608,22 @@ func (m *model) handleSlashCommand(cmdStr string) {
 		} else {
 			var sb strings.Builder
 			sb.WriteString(fmt.Sprintf("Saved memories (%d items):\n", len(items)))
-			for i, item := range items {
-				sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, item.Content))
+			for _, item := range items {
+				sb.WriteString(fmt.Sprintf("  [%s] %s\n", shortMemoryID(item.ID), item.Content))
 			}
-			sb.WriteString("\nUse /forget <number> to remove, or /forget-all to clear.")
+			sb.WriteString("\nUse /forget <memory-id> to remove one item, or /forget-all to clear everything.")
 			m.addSystemMessage(sb.String())
 		}
 
 	case "/forget":
 		if arg == "" {
-			m.addSystemMessage("Usage: /forget <number> (use /memory to see the numbered list)")
+			m.addSystemMessage("Usage: /forget <memory-id> (use /memory to see saved ids)")
 		} else {
-			var idx int
-			if _, err := fmt.Sscanf(arg, "%d", &idx); err != nil || idx < 1 {
-				m.addSystemMessage("Please provide a valid memory number. Use /memory to see the list.")
+			store := memory.Load()
+			if err := store.RemoveByID(resolveMemoryID(arg, store.List())); err != nil {
+				m.addSystemMessage(fmt.Sprintf("Error: %v", err))
 			} else {
-				store := memory.Load()
-				if err := store.Remove(idx - 1); err != nil {
-					m.addSystemMessage(fmt.Sprintf("Error: %v", err))
-				} else {
-					m.addSystemMessage(fmt.Sprintf("Memory #%d removed. (%d remaining)", idx, store.Count()))
-				}
+				m.addSystemMessage(fmt.Sprintf("Memory [%s] removed. (%d remaining)", strings.TrimSpace(arg), store.Count()))
 			}
 		}
 
@@ -638,7 +664,7 @@ func (m model) View() tea.View {
 		provider = "gemini"
 	}
 	activePrompt := prompts.GetActivePrompt()
-	configInfo := statusBarStyle.Render(fmt.Sprintf("  %s | %s | %s | %s", provider, activePrompt.Name, m.permissionMode, m.sessionID))
+	configInfo := statusBarStyle.Render(fmt.Sprintf("  %s | %s | %s | %s | %s", provider, activePrompt.Name, m.workflowMode, m.permissionMode, m.sessionID))
 	header := fmt.Sprintf("%s%s\n\n", title, configInfo)
 
 	vp := viewportStyle.Render(m.viewport.View())
@@ -689,7 +715,7 @@ func (m *model) updateViewport() {
 
 			renderer, err := glamour.NewTermRenderer(
 				glamour.WithAutoStyle(),
-				glamour.WithWordWrap(m.viewport.Width()),
+				glamour.WithWordWrap(max(m.viewport.Width()-4, 20)),
 			)
 			if err == nil {
 				out, err := renderer.Render(msg.Content)
@@ -712,19 +738,20 @@ func (m *model) updateViewport() {
 func (m model) makeAgentCall(prompt string) tea.Cmd {
 	chat := m.chat
 	permissionMode := m.permissionMode
+	workflow := m.workflowMode
 
 	return func() tea.Msg {
-		text, approvals, err := runAgentTurn(chat, prompt, permissionMode)
+		text, approvals, err := runAgentTurn(chat, prompt, permissionMode, workflow)
 		return aiResponseMsg{Text: text, ApprovalRequests: approvals, Err: err}
 	}
 }
 
-func runAgentTurn(chat *agentMod.ChatSession, userPrompt string, permissionMode computer.PermissionMode) (string, []approvalRequest, error) {
+func runAgentTurn(chat *agentMod.ChatSession, userPrompt string, permissionMode computer.PermissionMode, workflow workflowMode) (string, []approvalRequest, error) {
 	turnPrompt := userPrompt
 	finalText := ""
 
 	for step := 0; step < maxAgentSteps; step++ {
-		response, err := agentMod.AskAIWithHistoryAndSystem(chat, turnPrompt, buildAgentRuntimeInstructions(permissionMode))
+		response, err := agentMod.AskAIWithHistoryAndSystem(chat, turnPrompt, buildAgentRuntimeInstructions(permissionMode, workflow))
 		if err != nil {
 			return "", nil, err
 		}
@@ -733,6 +760,13 @@ func runAgentTurn(chat *agentMod.ChatSession, userPrompt string, permissionMode 
 		commands, cleaned := computer.ExtractCommands(withoutFileTags)
 		if len(fileRequests) == 0 && len(commands) == 0 {
 			return strings.TrimSpace(cleaned), nil, nil
+		}
+
+		if workflow == workflowPlan {
+			if cleaned == "" {
+				return "Plan mode is active. I stopped before running commands or changing files. Switch to /workflow run when you want me to execute the plan.", nil, nil
+			}
+			return strings.TrimSpace(cleaned) + "\n\nPlan mode is active, so I stopped before running commands or changing files. Switch to /workflow run when you want me to execute the plan.", nil, nil
 		}
 
 		if !permissionMode.AllowsExecution() {
@@ -790,7 +824,11 @@ func (m *model) recalcViewportHeight() {
 	}
 	chrome := 12
 	if m.showSelector && len(m.selectorItems) > 0 {
-		chrome += len(m.selectorItems) + 2
+		visibleCount := len(m.selectorItems)
+		if visibleCount > 6 {
+			visibleCount = 6
+		}
+		chrome += visibleCount + 2
 	}
 	vpHeight := m.height - chrome
 	if vpHeight < 3 {
@@ -852,6 +890,7 @@ func (m *model) saveSession() error {
 		Messages:         make([]sessionstore.Message, 0, len(m.messages)),
 		ChatEntries:      append([]agentMod.ChatEntry{}, m.chat.Entries...),
 		PermissionMode:   m.permissionMode.String(),
+		WorkflowMode:     string(m.workflowMode),
 		NextApprovalID:   m.nextApprovalID,
 		PendingApprovals: make([]sessionstore.PendingApproval, 0, len(m.pending)),
 	}
@@ -884,12 +923,14 @@ func (m *model) saveSession() error {
 }
 
 func persistEnv(key, value string) {
-	envMap, err := godotenv.Read(".env")
+	envPath := appstate.EnvFilePath()
+	_, _ = appstate.EnsureBaseDir()
+	envMap, err := godotenv.Read(envPath)
 	if err != nil {
 		envMap = make(map[string]string)
 	}
 	envMap[key] = value
-	_ = godotenv.Write(envMap, ".env")
+	_ = godotenv.Write(envMap, envPath)
 }
 
 func providerToEnvKey(provider string) string {
@@ -914,14 +955,59 @@ func maskKey(key string) string {
 	return key[:4] + "..." + key[len(key)-4:]
 }
 
-func buildAgentRuntimeInstructions(permissionMode computer.PermissionMode) string {
-	return strings.Join([]string{
+func shortMemoryID(id string) string {
+	if len(id) <= 12 {
+		return id
+	}
+	return id[len(id)-12:]
+}
+
+func resolveMemoryID(input string, items []memory.Item) string {
+	want := strings.TrimSpace(input)
+	for _, item := range items {
+		if item.ID == want || shortMemoryID(item.ID) == want {
+			return item.ID
+		}
+	}
+	return want
+}
+
+func parseWorkflowMode(input string) workflowMode {
+	switch strings.ToLower(strings.TrimSpace(input)) {
+	case "", "run":
+		return workflowRun
+	case "plan", "planning":
+		return workflowPlan
+	default:
+		return ""
+	}
+}
+
+func buildAgentRuntimeInstructions(permissionMode computer.PermissionMode, workflow workflowMode) string {
+	instructions := []string{
 		computer.Instructions(permissionMode),
 		filesys.Instructions(permissionMode),
-		"Before taking action, think through the smallest safe plan. Prefer read/list operations first, then targeted edits, then verification.",
-		"If a risky action is needed, request it normally. The app may pause for approval.",
+		"Always remember: user memories describe the user, not GlAgent. Do not speak as if the user's identity is your own.",
 		"Prefer built-in file actions over shell for file work. Use shell commands mainly for running programs, build tools, git, or machine inspection.",
-	}, "\n\n")
+	}
+
+	if workflow == workflowPlan {
+		instructions = append(instructions,
+			"You are currently in workflow mode: plan.",
+			"In plan mode, inspect and reason, but do not execute commands or write, patch, move, or delete files.",
+			"If you need action, respond with a concise plan, what you inspected, and the exact next action you would take in run mode.",
+			"Do not emit command tags or mutating file tags in this mode.",
+		)
+	} else {
+		instructions = append(instructions,
+			"You are currently in workflow mode: run.",
+			"Before taking action, think through the smallest safe plan. Prefer read/list operations first, then targeted edits, then verification.",
+			"If a risky action is needed, request it normally. The app may pause for approval.",
+			"When the user asks you to do work, carry it through instead of only describing commands.",
+		)
+	}
+
+	return strings.Join(instructions, "\n\n")
 }
 
 func collectApprovals(fileRequests []filesys.Request, commands []computer.CommandRequest, permissionMode computer.PermissionMode) []approvalRequest {

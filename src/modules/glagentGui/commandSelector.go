@@ -31,6 +31,7 @@ const (
 var allCommands = []slashCommand{
 	{Name: "/agent", Description: "Switch AI provider", Usage: "/agent <provider>"},
 	{Name: "/mode", Description: "Switch AI model", Usage: "/mode <model>"},
+	{Name: "/workflow", Description: "Set GlAgent workflow mode", Usage: "/workflow <plan|run>"},
 	{Name: "/key", Description: "Set API key for a provider", Usage: "/key <provider> <api_key>"},
 	{Name: "/prompt", Description: "Set active system prompt", Usage: "/prompt <name>"},
 	{Name: "/prompts", Description: "List available prompts", Usage: "/prompts"},
@@ -45,7 +46,7 @@ var allCommands = []slashCommand{
 	{Name: "/git-commit", Description: "Create a git commit", Usage: "/git-commit <message>"},
 	{Name: "/save", Description: "Save something to memory", Usage: "/save <content>"},
 	{Name: "/memory", Description: "View saved memories", Usage: "/memory"},
-	{Name: "/forget", Description: "Remove a memory by number", Usage: "/forget <number>"},
+	{Name: "/forget", Description: "Remove a memory by id", Usage: "/forget <memory-id>"},
 	{Name: "/forget-all", Description: "Clear all memories", Usage: "/forget-all"},
 	{Name: "/ollama-models", Description: "List local Ollama models", Usage: "/ollama-models"},
 	{Name: "/status", Description: "Show current config", Usage: "/status"},
@@ -72,6 +73,11 @@ var computerModeSuggestions = []selectorItem{
 	{Value: "off", Description: "Do not let the agent run commands"},
 	{Value: "workspace", Description: "Run dev and inspection commands in this project"},
 	{Value: "full", Description: "Broad shell control. Use with care"},
+}
+
+var workflowModeSuggestions = []selectorItem{
+	{Value: "run", Description: "Act directly, using tools when needed"},
+	{Value: "plan", Description: "Inspect first and respond with a plan before acting"},
 }
 
 var geminiModels = []selectorItem{
@@ -214,6 +220,10 @@ func getArgumentSuggestions(command string, argIndex int, currentArg string) []s
 		if argIndex == 0 {
 			pool = computerModeSuggestions
 		}
+	case "/workflow":
+		if argIndex == 0 {
+			pool = workflowModeSuggestions
+		}
 	}
 
 	if pool == nil {
@@ -283,6 +293,8 @@ func renderSelector(items []selectorItem, cursor int, width int) string {
 		return ""
 	}
 
+	items, cursor = visibleSelectorWindow(items, cursor, 6)
+
 	var b strings.Builder
 	for i, item := range items {
 		nameStr := item.Value
@@ -303,4 +315,22 @@ func renderSelector(items []selectorItem, cursor int, width int) string {
 	}
 
 	return selectorBorderStyle.Width(width - 4).Render(b.String())
+}
+
+func visibleSelectorWindow(items []selectorItem, cursor int, maxVisible int) ([]selectorItem, int) {
+	if len(items) <= maxVisible || maxVisible <= 0 {
+		return items, cursor
+	}
+
+	start := cursor - maxVisible/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + maxVisible
+	if end > len(items) {
+		end = len(items)
+		start = end - maxVisible
+	}
+
+	return items[start:end], cursor - start
 }

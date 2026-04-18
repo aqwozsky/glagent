@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"glagent/src/modules/agentMod/providers"
+	"glagent/src/modules/appstate"
 	consolemarkdown "glagent/src/modules/consoleMarkdown"
 	"glagent/src/modules/memory"
 	"glagent/src/prompts"
@@ -32,7 +33,7 @@ func buildSystemPrompt(extraParts ...string) string {
 }
 
 func getProvider() (providers.Provider, string, error) {
-	_ = godotenv.Load()
+	_ = godotenv.Load(appstate.EnvFilePath())
 
 	name := os.Getenv("AI_PROVIDER")
 	model := os.Getenv("AI_MODEL")
@@ -88,7 +89,10 @@ func AskAIWithHistoryAndSystem(session *ChatSession, userInput string, extraSyst
 	}
 
 	systemPrompt := buildSystemPrompt(extraSystem)
-	contextPrompt := session.BuildPrompt(userInput)
+	contextPrompt := session.BuildPrompt()
+	if contextPrompt == "" && strings.TrimSpace(userInput) != "" {
+		contextPrompt = "User: " + userInput + "\nAssistant:"
+	}
 
 	return provider.Generate(contextPrompt, providers.GenerateOptions{
 		Model:        model,

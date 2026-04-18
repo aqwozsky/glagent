@@ -7,12 +7,13 @@ import (
 	"strings"
 	"sync"
 	"time"
-)
 
-const memoryFile = "memory.json"
+	"glagent/src/modules/appstate"
+)
 
 // Item represents a single saved memory entry.
 type Item struct {
+	ID        string    `json:"id"`
 	Content   string    `json:"content"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -32,9 +33,12 @@ func Load() *Store {
 	}
 
 	store := &Store{}
-	data, err := os.ReadFile(memoryFile)
+	data, err := os.ReadFile(appstate.MemoryFilePath())
 	if err == nil {
 		_ = json.Unmarshal(data, store)
+		if store.ensureIDsLocked() {
+			_ = store.saveUnlocked()
+		}
 	}
 	globalStore = store
 	return store
@@ -42,36 +46,53 @@ func Load() *Store {
 
 // save writes the current memory to disk.
 func (s *Store) save() error {
+	if _, err := appstate.EnsureBaseDir(); err != nil {
+		return err
+	}
+	s.ensureIDsLocked()
+	return s.saveUnlocked()
+}
+
+func (s *Store) saveUnlocked() error {
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(memoryFile, data, 0644)
+	return os.WriteFile(appstate.MemoryFilePath(), data, 0644)
 }
 
 // Add stores a new memory item and persists to disk.
-func (s *Store) Add(content string) error {
+func (s *Store) Add(content string) (Item, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.Items = append(s.Items, Item{
+	item := Item{
+		ID:        newID(),
 		Content:   content,
 		CreatedAt: time.Now(),
-	})
-	return s.save()
+	}
+	s.Items = append(s.Items, item)
+	return item, s.save()
 }
 
-// Remove deletes a memory item by index (0-based) and persists.
-func (s *Store) Remove(index int) error {
+// RemoveByID deletes a memory item by id and persists.
+func (s *Store) RemoveByID(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if index < 0 || index >= len(s.Items) {
-		return fmt.Errorf("invalid index %d (have %d items)", index, len(s.Items))
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("memory id is required")
 	}
 
-	s.Items = append(s.Items[:index], s.Items[index+1:]...)
-	return s.save()
+	for i, item := range s.Items {
+		if item.ID == id {
+			s.Items = append(s.Items[:i], s.Items[i+1:]...)
+			return s.save()
+		}
+	}
+
+	return fmt.Errorf("memory id %q not found", id)
 }
 
 // Clear removes all memory items and persists.
@@ -87,7 +108,10 @@ func (s *Store) Clear() error {
 func (s *Store) List() []Item {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.Items
+
+	items := make([]Item, len(s.Items))
+	copy(items, s.Items)
+	return items
 }
 
 // Count returns the number of stored items.
@@ -108,10 +132,13 @@ func (s *Store) BuildContext() string {
 	}
 
 	var b strings.Builder
-	b.WriteString("== User's Saved Memories ==\n")
-	b.WriteString("The following facts were explicitly saved by the user. Keep them in mind:\n\n")
-	for i, item := range s.Items {
-		b.WriteString(fmt.Sprintf("%d. %s\n", i+1, item.Content))
+	b.WriteString("== User Saved Memories ==\n")
+	b.WriteString("These facts were explicitly saved by the user. Treat them as persistent context unless the user removes them.\n")
+	b.WriteString("These memories describe the user, the user's preferences, the user's projects, or the user's environment.\n")
+	b.WriteString("Do not treat these memories as your own identity, biography, or preferences.\n")
+	b.WriteString("Never claim that the user's name, role, or personal details are your own. You are always GlAgent.\n\n")
+	for _, item := range s.Items {
+		b.WriteString(fmt.Sprintf("- [%s] %s\n", shortID(item.ID), item.Content))
 	}
 	b.WriteString("\n== End of Memories ==")
 	return b.String()
@@ -123,8 +150,8 @@ func (s *Store) BuildContext() string {
 func DetectSaveIntent(msg string) (string, bool) {
 	lower := strings.ToLower(msg)
 
-	// Patterns to detect save intent
 	prefixes := []string{
+		"remember ",
 		"remember that ",
 		"remember this: ",
 		"remember: ",
@@ -149,6 +176,9 @@ func DetectSaveIntent(msg string) (string, bool) {
 		idx := strings.Index(lower, prefix)
 		if idx != -1 {
 			content := strings.TrimSpace(msg[idx+len(prefix):])
+			if strings.HasPrefix(strings.ToLower(content), "that ") {
+				content = strings.TrimSpace(content[len("that "):])
+			}
 			if content != "" {
 				return content, true
 			}
@@ -156,4 +186,30 @@ func DetectSaveIntent(msg string) (string, bool) {
 	}
 
 	return "", false
+}
+
+func (s *Store) ensureIDsLocked() bool {
+	updated := false
+	for i := range s.Items {
+		if strings.TrimSpace(s.Items[i].ID) == "" {
+			s.Items[i].ID = newID()
+			updated = true
+		}
+		if s.Items[i].CreatedAt.IsZero() {
+			s.Items[i].CreatedAt = time.Now()
+			updated = true
+		}
+	}
+	return updated
+}
+
+func newID() string {
+	return "mem_" + time.Now().UTC().Format("20060102_150405.000000000")
+}
+
+func shortID(id string) string {
+	if len(id) <= 12 {
+		return id
+	}
+	return id[len(id)-12:]
 }

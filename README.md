@@ -13,6 +13,7 @@ GlAgent is a terminal-first AI agent built in Go. It combines a Bubble Tea TUI, 
 - Read, list, patch, move, delete, and write files through built-in structured file actions
 - Save and resume chat sessions with `--continue <chat-id>`
 - Store lightweight long-term memory in `memory.json`
+- Switch between planning and running workflows
 - Switch system prompts for coding, writing, or analysis
 - Use autocomplete for slash commands and common arguments
 - Work with cloud models or local Ollama models
@@ -73,6 +74,20 @@ Built-in file actions:
 
 In `workspace` mode, file actions are limited to the current project directory. In `full` mode, broader file access is allowed.
 Risky actions can pause for approval before execution.
+
+### Planning and Running Modes
+
+GlAgent now separates workflow mode from model selection:
+
+- `run`: the default mode, where GlAgent can inspect, execute, edit, and verify
+- `plan`: a planning mode, where GlAgent should stop before running commands or changing files and instead return a concrete next-step plan
+
+Switch with:
+
+- `/workflow run`
+- `/workflow plan`
+
+Workflow mode is saved with the session, so `--continue` restores whether that chat was in planning or running mode.
 
 ### Persistent Sessions
 
@@ -236,6 +251,8 @@ go run main.go --session repo-audit
 - `/computer off`: disable command execution
 - `/computer workspace`: allow project-scoped command execution
 - `/computer full`: allow broader shell control and show a warning
+- `/workflow run`: let GlAgent act directly
+- `/workflow plan`: keep GlAgent in planning mode
 
 ### Approvals
 
@@ -261,7 +278,7 @@ Approvals now persist in saved sessions, so if you exit and continue the chat la
 
 - `/save <text>`: save a memory
 - `/memory`: list all saved memories
-- `/forget <number>`: delete one memory
+- `/forget <memory-id>`: delete one memory by id
 - `/forget-all`: clear all memories
 
 ### Utilities
@@ -371,6 +388,8 @@ Files GlAgent writes today:
 - `.env`: provider, model, and prompt configuration
 - `memory.json`: saved memories
 - `.glagent/sessions/*.json`: persisted chat sessions
+
+Saved sessions also include the current workflow mode, permission mode, pending approvals, and structured chat context.
 
 ## Project Structure
 
