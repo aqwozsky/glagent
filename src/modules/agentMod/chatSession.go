@@ -1,34 +1,60 @@
 package agentMod
 
-import "strings"
+import (
+	"strings"
+)
+
+type ChatEntry struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
 
 type ChatSession struct {
-	History  []string
-	MaxTurns int
+	Entries  []ChatEntry `json:"entries"`
+	MaxTurns int         `json:"max_turns"`
 }
 
 func NewChatSession(maxTurns int) *ChatSession {
 	return &ChatSession{
-		History:  []string{},
+		Entries:  []ChatEntry{},
 		MaxTurns: maxTurns,
 	}
 }
 
+func NewChatSessionFromEntries(entries []ChatEntry, maxTurns int) *ChatSession {
+	session := NewChatSession(maxTurns)
+	session.Entries = append(session.Entries, entries...)
+	session.trim()
+	return session
+}
+
 func (c *ChatSession) AddUserMessage(msg string) {
-	c.History = append(c.History, "User: "+msg)
-	c.trim()
+	c.AddMessage("User", msg)
 }
 
 func (c *ChatSession) AddAssistantMessage(msg string) {
-	c.History = append(c.History, "Assistant: "+msg)
+	c.AddMessage("Assistant", msg)
+}
+
+func (c *ChatSession) AddSystemMessage(msg string) {
+	c.AddMessage("System", msg)
+}
+
+func (c *ChatSession) AddMessage(role, msg string) {
+	c.Entries = append(c.Entries, ChatEntry{
+		Role:    normalizeRole(role),
+		Content: msg,
+	})
 	c.trim()
 }
 
 func (c *ChatSession) BuildPrompt(userInput string) string {
 	var b strings.Builder
 
-	if len(c.History) > 0 {
-		b.WriteString(strings.Join(c.History, "\n"))
+	for _, entry := range c.Entries {
+		b.WriteString(normalizeRole(entry.Role))
+		b.WriteString(": ")
+		b.WriteString(entry.Content)
 		b.WriteString("\n")
 	}
 
@@ -40,7 +66,11 @@ func (c *ChatSession) BuildPrompt(userInput string) string {
 }
 
 func (c *ChatSession) Clear() {
-	c.History = []string{}
+	c.Entries = []ChatEntry{}
+}
+
+func (c *ChatSession) HistoryCount() int {
+	return len(c.Entries)
 }
 
 func (c *ChatSession) trim() {
@@ -48,8 +78,19 @@ func (c *ChatSession) trim() {
 		return
 	}
 
-	maxLines := c.MaxTurns * 2
-	if len(c.History) > maxLines {
-		c.History = c.History[len(c.History)-maxLines:]
+	maxEntries := c.MaxTurns * 4
+	if len(c.Entries) > maxEntries {
+		c.Entries = c.Entries[len(c.Entries)-maxEntries:]
+	}
+}
+
+func normalizeRole(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "assistant":
+		return "Assistant"
+	case "system":
+		return "System"
+	default:
+		return "User"
 	}
 }

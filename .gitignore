@@ -5,3 +5,5 @@
 *.exe
 
 go.sum
+memory.json
+.glagent/
